@@ -1,0 +1,16 @@
+project_id = "chrnbgrxdvgakogdrkzp"
+
+[functions.demo-access]
+verify_jwt = false
+
+[functions.agent-run]
+verify_jwt = false
+
+[functions.agent-runs]
+verify_jwt = false
+
+[functions.run-details]
+verify_jwt = false
+
+[functions.replay-run]
+verify_jwt = false
