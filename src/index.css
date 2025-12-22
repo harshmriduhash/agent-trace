@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap");
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -35,7 +37,7 @@
     --input: 220 16% 14%;
     --ring: 142 76% 46%;
 
-    --radius: 0.5rem;
+    --radius: 3rem;
 
     /* Status colors */
     --success: 142 76% 46%;
@@ -70,10 +72,19 @@
     /* Shadows */
     --shadow-glow-primary: 0 0 30px hsl(142 76% 46% / 0.2);
     --shadow-glow-accent: 0 0 30px hsl(262 83% 58% / 0.2);
+    --shadow-sm: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
+    --shadow: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
+    --shadow-md: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
+    --shadow-lg: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
   }
 
   .dark {
     /* Same as root - dark only design */
+    --radius: 3rem;
+    --shadow-sm: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
+    --shadow: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
+    --shadow-md: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04);
+    --shadow-lg: 0px 1px 0px 0px hsla(0, 0%, 0%, 0.04)
   }
 }
 
