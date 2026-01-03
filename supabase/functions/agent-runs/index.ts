@@ -44,7 +44,7 @@ serve(async (req) => {
       .from('agent_runs')
       .select('*')
       .eq('demo_session_id', demoSessionId)
-      .order('created_at', { ascending: false });
+      .order('started_at', { ascending: false });
 
     if (runsError) {
       console.error('Error fetching runs:', runsError);
