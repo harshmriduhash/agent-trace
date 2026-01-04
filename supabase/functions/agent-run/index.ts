@@ -19,44 +19,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Validate demo session
-    const demoSessionId = req.headers.get('x-demo-session');
-    if (!demoSessionId) {
-      return new Response(
-        JSON.stringify({ error: 'Missing X-Demo-Session header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Check session validity and run count
-    const { data: session, error: sessionError } = await supabase
-      .from('demo_sessions')
-      .select('*')
-      .eq('id', demoSessionId)
-      .single();
-
-    if (sessionError || !session) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid demo session' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if (new Date(session.expires_at) < new Date()) {
-      return new Response(
-        JSON.stringify({ error: 'Demo session expired' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    if (session.run_count >= MAX_RUNS_PER_SESSION) {
-      return new Response(
-        JSON.stringify({ error: `Maximum ${MAX_RUNS_PER_SESSION} runs per demo session reached` }),
-        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const { query } = await req.json();
+    const { query, user_id } = await req.json();
     if (!query) {
       return new Response(
         JSON.stringify({ error: 'Missing query field' }),
@@ -64,15 +27,64 @@ serve(async (req) => {
       );
     }
 
+    // Check for authenticated user or demo session
+    const demoSessionId = req.headers.get('x-demo-session');
+    let sessionUserId = user_id;
+    let demoSession = null;
+
+    if (demoSessionId) {
+      // Demo session flow
+      const { data: session, error: sessionError } = await supabase
+        .from('demo_sessions')
+        .select('*')
+        .eq('id', demoSessionId)
+        .single();
+
+      if (sessionError || !session) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid demo session' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (new Date(session.expires_at) < new Date()) {
+        return new Response(
+          JSON.stringify({ error: 'Demo session expired' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (session.run_count >= MAX_RUNS_PER_SESSION) {
+        return new Response(
+          JSON.stringify({ error: `Maximum ${MAX_RUNS_PER_SESSION} runs per demo session reached` }),
+          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      demoSession = session;
+    } else if (!sessionUserId) {
+      return new Response(
+        JSON.stringify({ error: 'Authentication required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Create agent run
+    const runData: Record<string, unknown> = {
+      agent_name: 'Research Agent',
+      status: 'running',
+      input_query: query,
+    };
+
+    if (demoSession) {
+      runData.demo_session_id = demoSession.id;
+    } else {
+      runData.user_id = sessionUserId;
+    }
+
     const { data: run, error: runError } = await supabase
       .from('agent_runs')
-      .insert({
-        demo_session_id: demoSessionId,
-        agent_name: 'Research Agent',
-        status: 'running',
-        input_query: query,
-      })
+      .insert(runData)
       .select()
       .single();
 
@@ -84,14 +96,16 @@ serve(async (req) => {
       );
     }
 
-    // Increment run count
-    await supabase
-      .from('demo_sessions')
-      .update({ run_count: session.run_count + 1 })
-      .eq('id', demoSessionId);
+    // Increment run count for demo session
+    if (demoSession) {
+      await supabase
+        .from('demo_sessions')
+        .update({ run_count: demoSession.run_count + 1 })
+        .eq('id', demoSession.id);
+    }
 
     // Execute agent with step tracking
-    const steps: any[] = [];
+    const steps: Record<string, unknown>[] = [];
     let totalLatency = 0;
     let totalTokens = 0;
     let overallConfidence = 0;
@@ -110,7 +124,7 @@ serve(async (req) => {
         latency_ms: Date.now() - step1Start + 45,
         confidence: 0.95,
       });
-      totalLatency += steps[0].latency_ms;
+      totalLatency += (steps[0].latency_ms as number);
 
       // Step 2: Tool Call - Web Search
       const step2Start = Date.now();
@@ -130,7 +144,7 @@ serve(async (req) => {
         latency_ms: Date.now() - step2Start + 312,
         confidence: 0.88,
       });
-      totalLatency += steps[1].latency_ms;
+      totalLatency += (steps[1].latency_ms as number);
 
       // Step 3: Tool Result Processing
       const step3Start = Date.now();
@@ -148,7 +162,7 @@ serve(async (req) => {
         latency_ms: Date.now() - step3Start + 89,
         confidence: 0.86,
       });
-      totalLatency += steps[2].latency_ms;
+      totalLatency += (steps[2].latency_ms as number);
 
       // Step 4: Reasoning (AI call)
       const step4Start = Date.now();
@@ -204,7 +218,7 @@ serve(async (req) => {
         latency_ms: Date.now() - step4Start + 450,
         confidence: reasoningConfidence,
       });
-      totalLatency += steps[3].latency_ms;
+      totalLatency += (steps[3].latency_ms as number);
 
       // Step 5: Final Output
       const step5Start = Date.now();
@@ -222,10 +236,10 @@ serve(async (req) => {
         latency_ms: Date.now() - step5Start + 23,
         confidence: 0.89,
       });
-      totalLatency += steps[4].latency_ms;
+      totalLatency += (steps[4].latency_ms as number);
 
       // Calculate overall confidence
-      overallConfidence = steps.reduce((acc, s) => acc + (s.confidence || 0), 0) / steps.length;
+      overallConfidence = steps.reduce((acc, s) => acc + ((s.confidence as number) || 0), 0) / steps.length;
 
     } catch (execError) {
       console.error('Agent execution error:', execError);
