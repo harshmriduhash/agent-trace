@@ -5,8 +5,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Activity, Play, Clock, Zap, Target, AlertTriangle, LogOut } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import Navbar from "@/components/Navbar";
+import { Activity, Play, Clock, Zap, Target, AlertTriangle, Plus } from "lucide-react";
 import { format } from "date-fns";
+import { supabase } from "@/integrations/supabase/client";
 
 interface AgentRun {
   id: string;
@@ -37,30 +40,53 @@ const Dashboard = () => {
   const [isRunning, setIsRunning] = useState(false);
   const navigate = useNavigate();
   const { toast } = useToast();
-
-  const sessionId = localStorage.getItem("demo_session_id");
+  const { user, session } = useAuth();
 
   useEffect(() => {
-    if (!sessionId) {
-      navigate("/");
-      return;
+    if (user) {
+      fetchRuns();
     }
-    fetchRuns();
-  }, [sessionId]);
+  }, [user]);
 
   const fetchRuns = async () => {
+    if (!session?.access_token) return;
+    
     setIsLoading(true);
     try {
+      // Fetch runs for authenticated user
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agent-runs`,
+        `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/agent_runs?user_id=eq.${user?.id}&select=*&order=started_at.desc`,
         {
-          headers: { "X-Demo-Session": sessionId! },
+          headers: {
+            'apikey': import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            'Authorization': `Bearer ${session.access_token}`,
+          }
         }
       );
       const data = await response.json();
-      if (response.ok) {
-        setRuns(data.runs || []);
-        setMetrics(data.metrics);
+      
+      if (Array.isArray(data)) {
+        setRuns(data);
+        
+        // Calculate metrics
+        const totalRuns = data.length;
+        const successRuns = data.filter((r: AgentRun) => r.status === 'success').length;
+        const failedRuns = data.filter((r: AgentRun) => r.status === 'failed' || r.status === 'timeout').length;
+        const avgConfidence = totalRuns > 0 
+          ? data.reduce((acc: number, r: AgentRun) => acc + (r.confidence_score || 0), 0) / totalRuns 
+          : 0;
+        const avgTokens = totalRuns > 0
+          ? data.reduce((acc: number, r: AgentRun) => acc + (r.token_usage || 0), 0) / totalRuns
+          : 0;
+
+        setMetrics({
+          total_runs: totalRuns,
+          success_count: successRuns,
+          failure_count: failedRuns,
+          failure_rate: totalRuns > 0 ? (failedRuns / totalRuns) * 100 : 0,
+          avg_confidence: avgConfidence,
+          avg_token_usage: avgTokens,
+        });
       }
     } catch (error) {
       console.error("Failed to fetch runs:", error);
@@ -74,6 +100,12 @@ const Dashboard = () => {
       toast({ title: "Enter a query", variant: "destructive" });
       return;
     }
+    
+    if (!session?.access_token) {
+      toast({ title: "Not authenticated", variant: "destructive" });
+      return;
+    }
+
     setIsRunning(true);
     try {
       const response = await fetch(
@@ -82,9 +114,9 @@ const Dashboard = () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Demo-Session": sessionId!,
+            "Authorization": `Bearer ${session.access_token}`,
           },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query, user_id: user?.id }),
         }
       );
       const data = await response.json();
@@ -103,12 +135,6 @@ const Dashboard = () => {
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("demo_session_id");
-    localStorage.removeItem("demo_expires_at");
-    navigate("/");
-  };
-
   const getStatusBadge = (status: string) => {
     const variants: Record<string, string> = {
       success: "bg-success/20 text-success border-success/30",
@@ -122,33 +148,37 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border px-6 py-4">
-        <div className="flex items-center justify-between max-w-7xl mx-auto">
-          <div className="flex items-center gap-3">
-            <Activity className="h-6 w-6 text-primary" />
-            <span className="text-xl font-bold">AgentTrace</span>
-            <Badge variant="outline" className="ml-2">Demo</Badge>
-          </div>
-          <Button variant="ghost" size="sm" onClick={handleLogout}>
-            <LogOut className="h-4 w-4 mr-2" /> Exit Demo
-          </Button>
-        </div>
-      </header>
+      <Navbar />
 
-      <main className="max-w-7xl mx-auto p-6 space-y-6">
+      <main className="container py-8 space-y-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Dashboard</h1>
+            <p className="text-muted-foreground">Monitor and manage your agent executions</p>
+          </div>
+        </div>
+
         {/* Metrics */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <MetricCard icon={<Play />} label="Total Runs" value={metrics?.total_runs || 0} />
-          <MetricCard icon={<Target />} label="Avg Confidence" value={`${((metrics?.avg_confidence || 0) * 100).toFixed(0)}%`} />
-          <MetricCard icon={<AlertTriangle />} label="Failure Rate" value={`${(metrics?.failure_rate || 0).toFixed(0)}%`} color={metrics?.failure_rate && metrics.failure_rate > 20 ? "text-error" : undefined} />
-          <MetricCard icon={<Zap />} label="Avg Tokens" value={Math.round(metrics?.avg_token_usage || 0)} />
+          <MetricCard icon={<Play className="h-4 w-4" />} label="Total Runs" value={metrics?.total_runs || 0} />
+          <MetricCard icon={<Target className="h-4 w-4" />} label="Avg Confidence" value={`${((metrics?.avg_confidence || 0) * 100).toFixed(0)}%`} />
+          <MetricCard 
+            icon={<AlertTriangle className="h-4 w-4" />} 
+            label="Failure Rate" 
+            value={`${(metrics?.failure_rate || 0).toFixed(0)}%`} 
+            color={metrics?.failure_rate && metrics.failure_rate > 20 ? "text-error" : undefined} 
+          />
+          <MetricCard icon={<Zap className="h-4 w-4" />} label="Avg Tokens" value={Math.round(metrics?.avg_token_usage || 0)} />
         </div>
 
         {/* Trigger Run */}
         <Card className="bg-card border-border">
           <CardHeader>
-            <CardTitle className="text-lg">Trigger Agent Run</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Plus className="h-5 w-5" />
+              Trigger Agent Run
+            </CardTitle>
           </CardHeader>
           <CardContent className="flex gap-4">
             <Input
@@ -158,7 +188,7 @@ const Dashboard = () => {
               className="flex-1 bg-secondary"
               onKeyDown={(e) => e.key === "Enter" && triggerRun()}
             />
-            <Button onClick={triggerRun} disabled={isRunning} className="bg-primary text-primary-foreground">
+            <Button onClick={triggerRun} disabled={isRunning}>
               {isRunning ? "Running..." : "Run Agent"}
             </Button>
           </CardContent>
@@ -167,13 +197,22 @@ const Dashboard = () => {
         {/* Runs Table */}
         <Card className="bg-card border-border">
           <CardHeader>
-            <CardTitle className="text-lg">Agent Runs</CardTitle>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Activity className="h-5 w-5" />
+              Agent Runs
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
-              <p className="text-muted-foreground text-center py-8">Loading...</p>
+              <div className="flex items-center justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+              </div>
             ) : runs.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">No runs yet. Trigger your first agent run above.</p>
+              <div className="text-center py-12">
+                <Activity className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <h3 className="font-semibold mb-2">No runs yet</h3>
+                <p className="text-muted-foreground mb-4">Trigger your first agent run above to get started.</p>
+              </div>
             ) : (
               <div className="space-y-2">
                 {runs.map((run) => (
@@ -216,7 +255,7 @@ const MetricCard = ({ icon, label, value, color }: { icon: React.ReactNode; labe
   <Card className="bg-card border-border">
     <CardContent className="p-4">
       <div className="flex items-center gap-2 text-muted-foreground mb-1">
-        <span className="h-4 w-4">{icon}</span>
+        {icon}
         <span className="text-sm">{label}</span>
       </div>
       <div className={`text-2xl font-bold ${color || "text-foreground"}`}>{value}</div>

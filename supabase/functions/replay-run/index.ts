@@ -17,15 +17,7 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const demoSessionId = req.headers.get('x-demo-session');
-    if (!demoSessionId) {
-      return new Response(
-        JSON.stringify({ error: 'Missing X-Demo-Session header' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const { run_id } = await req.json();
+    const { run_id, user_id } = await req.json();
     if (!run_id) {
       return new Response(
         JSON.stringify({ error: 'Missing run_id' }),
@@ -33,27 +25,18 @@ serve(async (req) => {
       );
     }
 
-    // Validate session
-    const { data: session, error: sessionError } = await supabase
-      .from('demo_sessions')
-      .select('id, run_count')
-      .eq('id', demoSessionId)
-      .single();
-
-    if (sessionError || !session) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid demo session' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
+    const demoSessionId = req.headers.get('x-demo-session');
 
     // Get original run
-    const { data: originalRun, error: runError } = await supabase
-      .from('agent_runs')
-      .select('*')
-      .eq('id', run_id)
-      .eq('demo_session_id', demoSessionId)
-      .single();
+    let runQuery = supabase.from('agent_runs').select('*').eq('id', run_id);
+    
+    if (demoSessionId) {
+      runQuery = runQuery.eq('demo_session_id', demoSessionId);
+    } else if (user_id) {
+      runQuery = runQuery.eq('user_id', user_id);
+    }
+
+    const { data: originalRun, error: runError } = await runQuery.single();
 
     if (runError || !originalRun) {
       return new Response(
@@ -70,26 +53,46 @@ serve(async (req) => {
       );
     }
 
+    // Handle demo session run count
+    if (demoSessionId) {
+      const { data: session } = await supabase
+        .from('demo_sessions')
+        .select('run_count')
+        .eq('id', demoSessionId)
+        .single();
+
+      if (session) {
+        await supabase
+          .from('demo_sessions')
+          .update({ run_count: session.run_count + 1 })
+          .eq('id', demoSessionId);
+      }
+    }
+
     // Get original steps
-    const { data: originalSteps, error: stepsError } = await supabase
+    const { data: originalSteps } = await supabase
       .from('agent_steps')
       .select('*')
       .eq('agent_run_id', run_id)
       .order('step_index', { ascending: true });
 
-    if (stepsError) {
-      console.error('Error fetching original steps:', stepsError);
+    // Create new replayed run
+    const newRunData: Record<string, unknown> = {
+      agent_name: originalRun.agent_name,
+      status: 'running',
+      input_query: originalRun.input_query,
+    };
+
+    if (originalRun.demo_session_id) {
+      newRunData.demo_session_id = originalRun.demo_session_id;
+    }
+    if (originalRun.user_id) {
+      newRunData.user_id = originalRun.user_id;
     }
 
-    // Create new replayed run
     const { data: newRun, error: newRunError } = await supabase
       .from('agent_runs')
-      .insert({
-        demo_session_id: demoSessionId,
-        agent_name: originalRun.agent_name,
-        status: 'running',
-        input_query: originalRun.input_query,
-      })
+      .insert(newRunData)
       .select()
       .single();
 
@@ -107,22 +110,16 @@ serve(async (req) => {
       .update({ replay_count: originalRun.replay_count + 1 })
       .eq('id', run_id);
 
-    // Increment session run count
-    await supabase
-      .from('demo_sessions')
-      .update({ run_count: session.run_count + 1 })
-      .eq('id', demoSessionId);
-
     // Create replayed steps with slight variations
-    const replayedSteps = originalSteps?.map((step, index) => ({
+    const replayedSteps = originalSteps?.map((step) => ({
       agent_run_id: newRun.id,
       step_index: step.step_index,
       step_type: step.step_type,
       tool_name: step.tool_name,
       input: step.input,
       output: step.output,
-      latency_ms: Math.round((step.latency_ms || 100) * (0.9 + Math.random() * 0.2)), // ±10% variation
-      confidence: Math.min(1, Math.max(0, (step.confidence || 0.8) + (Math.random() * 0.1 - 0.05))), // ±5% variation
+      latency_ms: Math.round((step.latency_ms || 100) * (0.9 + Math.random() * 0.2)),
+      confidence: Math.min(1, Math.max(0, (step.confidence || 0.8) + (Math.random() * 0.1 - 0.05))),
     })) || [];
 
     if (replayedSteps.length > 0) {
