@@ -3,12 +3,11 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { Activity, Loader2 } from "lucide-react";
+import { Loader2, ArrowLeft } from "lucide-react";
 import { z } from "zod";
+import { motion } from "framer-motion";
 
 const emailSchema = z.string().email("Please enter a valid email");
 const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
@@ -16,13 +15,10 @@ const passwordSchema = z.string().min(8, "Password must be at least 8 characters
 const AuthPage = () => {
   const [searchParams] = useSearchParams();
   const initialMode = searchParams.get("mode") === "signup" ? "signup" : "signin";
-  const [activeTab, setActiveTab] = useState(initialMode);
+  const [mode, setMode] = useState<"signin" | "signup" | "forgot">(initialMode);
   const [isLoading, setIsLoading] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
   
-  const [signInData, setSignInData] = useState({ email: "", password: "" });
-  const [signUpData, setSignUpData] = useState({ email: "", password: "", fullName: "" });
-  const [forgotEmail, setForgotEmail] = useState("");
+  const [formData, setFormData] = useState({ email: "", password: "", fullName: "" });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const { user, signIn, signUp, resetPassword } = useAuth();
@@ -30,9 +26,7 @@ const AuthPage = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    if (user) {
-      navigate("/dashboard");
-    }
+    if (user) navigate("/dashboard");
   }, [user, navigate]);
 
   const validateField = (field: string, value: string, schema: z.ZodString) => {
@@ -45,262 +39,169 @@ const AuthPage = () => {
     return true;
   };
 
-  const handleSignIn = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    const emailValid = validateField("signInEmail", signInData.email, emailSchema);
-    const passwordValid = validateField("signInPassword", signInData.password, z.string().min(1, "Password is required"));
-    
-    if (!emailValid || !passwordValid) return;
-
-    setIsLoading(true);
-    const { error } = await signIn(signInData.email, signInData.password);
-    setIsLoading(false);
-
-    if (error) {
-      toast({
-        title: "Sign in failed",
-        description: error.message === "Invalid login credentials" 
-          ? "Invalid email or password. Please try again."
-          : error.message,
-        variant: "destructive"
-      });
-    } else {
-      toast({ title: "Welcome back!", description: "You've signed in successfully." });
-      navigate("/dashboard");
+    if (mode === "forgot") {
+      if (!validateField("email", formData.email, emailSchema)) return;
+      setIsLoading(true);
+      const { error } = await resetPassword(formData.email);
+      setIsLoading(false);
+      if (error) {
+        toast({ title: "Error", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "Check your email", description: "We sent you a password reset link." });
+        setMode("signin");
+      }
+      return;
     }
-  };
 
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
+    const emailValid = validateField("email", formData.email, emailSchema);
+    const passwordValid = validateField("password", formData.password, mode === "signup" ? passwordSchema : z.string().min(1, "Required"));
     
-    const emailValid = validateField("signUpEmail", signUpData.email, emailSchema);
-    const passwordValid = validateField("signUpPassword", signUpData.password, passwordSchema);
-    const nameValid = signUpData.fullName.trim().length > 0;
-    
-    if (!nameValid) {
-      setErrors(prev => ({ ...prev, fullName: "Full name is required" }));
+    if (mode === "signup" && !formData.fullName.trim()) {
+      setErrors(prev => ({ ...prev, fullName: "Name is required" }));
       return;
     }
     
     if (!emailValid || !passwordValid) return;
 
     setIsLoading(true);
-    const { error } = await signUp(signUpData.email, signUpData.password, signUpData.fullName);
-    setIsLoading(false);
-
-    if (error) {
-      if (error.message.includes("already registered")) {
-        toast({
-          title: "Account exists",
-          description: "An account with this email already exists. Please sign in instead.",
-          variant: "destructive"
-        });
+    
+    if (mode === "signin") {
+      const { error } = await signIn(formData.email, formData.password);
+      setIsLoading(false);
+      if (error) {
+        toast({ title: "Sign in failed", description: "Invalid email or password.", variant: "destructive" });
       } else {
-        toast({ title: "Sign up failed", description: error.message, variant: "destructive" });
+        navigate("/dashboard");
       }
     } else {
-      toast({ 
-        title: "Account created!", 
-        description: "Please check your email to verify your account." 
-      });
-      navigate("/dashboard");
+      const { error } = await signUp(formData.email, formData.password, formData.fullName);
+      setIsLoading(false);
+      if (error) {
+        toast({ title: "Sign up failed", description: error.message, variant: "destructive" });
+      } else {
+        toast({ title: "Account created!", description: "Welcome to AgentTrace." });
+        navigate("/dashboard");
+      }
     }
   };
-
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validateField("forgotEmail", forgotEmail, emailSchema)) return;
-
-    setIsLoading(true);
-    const { error } = await resetPassword(forgotEmail);
-    setIsLoading(false);
-
-    if (error) {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    } else {
-      toast({ 
-        title: "Reset email sent", 
-        description: "Check your email for a password reset link." 
-      });
-      setShowForgotPassword(false);
-    }
-  };
-
-  if (showForgotPassword) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <Link to="/" className="flex items-center justify-center gap-2 mb-4">
-              <Activity className="h-8 w-8 text-primary" />
-              <span className="text-2xl font-bold">AgentTrace</span>
-            </Link>
-            <CardTitle>Reset Password</CardTitle>
-            <CardDescription>Enter your email to receive a reset link</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleForgotPassword} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="forgot-email">Email</Label>
-                <Input
-                  id="forgot-email"
-                  type="email"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="you@company.com"
-                  className="bg-secondary"
-                />
-                {errors.forgotEmail && (
-                  <p className="text-sm text-error">{errors.forgotEmail}</p>
-                )}
-              </div>
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Send Reset Link
-              </Button>
-              <Button 
-                type="button" 
-                variant="ghost" 
-                className="w-full"
-                onClick={() => setShowForgotPassword(false)}
-              >
-                Back to Sign In
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   return (
-    <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <Link to="/" className="flex items-center justify-center gap-2 mb-4">
-            <Activity className="h-8 w-8 text-primary" />
-            <span className="text-2xl font-bold">AgentTrace</span>
+    <div className="min-h-screen bg-background flex">
+      {/* Left Panel - Form */}
+      <div className="flex-1 flex items-center justify-center p-8">
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-sm"
+        >
+          <Link to="/" className="flex items-center gap-2.5 mb-12">
+            <div className="w-8 h-8 rounded-lg bg-foreground flex items-center justify-center">
+              <span className="text-background font-bold text-lg">A</span>
+            </div>
+            <span className="text-lg font-semibold">AgentTrace</span>
           </Link>
-          <CardTitle>Welcome</CardTitle>
-          <CardDescription>Sign in to your account or create a new one</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid w-full grid-cols-2 mb-6">
-              <TabsTrigger value="signin">Sign In</TabsTrigger>
-              <TabsTrigger value="signup">Sign Up</TabsTrigger>
-            </TabsList>
 
-            <TabsContent value="signin">
-              <form onSubmit={handleSignIn} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signin-email">Email</Label>
-                  <Input
-                    id="signin-email"
-                    type="email"
-                    value={signInData.email}
-                    onChange={(e) => setSignInData({ ...signInData, email: e.target.value })}
-                    placeholder="you@company.com"
-                    className="bg-secondary"
-                  />
-                  {errors.signInEmail && (
-                    <p className="text-sm text-error">{errors.signInEmail}</p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="signin-password">Password</Label>
-                    <button
-                      type="button"
-                      onClick={() => setShowForgotPassword(true)}
-                      className="text-sm text-primary hover:underline"
-                    >
-                      Forgot password?
-                    </button>
-                  </div>
-                  <Input
-                    id="signin-password"
-                    type="password"
-                    value={signInData.password}
-                    onChange={(e) => setSignInData({ ...signInData, password: e.target.value })}
-                    placeholder="••••••••"
-                    className="bg-secondary"
-                  />
-                  {errors.signInPassword && (
-                    <p className="text-sm text-error">{errors.signInPassword}</p>
-                  )}
-                </div>
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Sign In
-                </Button>
-              </form>
-            </TabsContent>
-
-            <TabsContent value="signup">
-              <form onSubmit={handleSignUp} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-name">Full Name</Label>
-                  <Input
-                    id="signup-name"
-                    value={signUpData.fullName}
-                    onChange={(e) => setSignUpData({ ...signUpData, fullName: e.target.value })}
-                    placeholder="John Doe"
-                    className="bg-secondary"
-                  />
-                  {errors.fullName && (
-                    <p className="text-sm text-error">{errors.fullName}</p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
-                  <Input
-                    id="signup-email"
-                    type="email"
-                    value={signUpData.email}
-                    onChange={(e) => setSignUpData({ ...signUpData, email: e.target.value })}
-                    placeholder="you@company.com"
-                    className="bg-secondary"
-                  />
-                  {errors.signUpEmail && (
-                    <p className="text-sm text-error">{errors.signUpEmail}</p>
-                  )}
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-password">Password</Label>
-                  <Input
-                    id="signup-password"
-                    type="password"
-                    value={signUpData.password}
-                    onChange={(e) => setSignUpData({ ...signUpData, password: e.target.value })}
-                    placeholder="••••••••"
-                    className="bg-secondary"
-                  />
-                  {errors.signUpPassword && (
-                    <p className="text-sm text-error">{errors.signUpPassword}</p>
-                  )}
-                  <p className="text-xs text-muted-foreground">
-                    Must be at least 8 characters
-                  </p>
-                </div>
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                  Create Account
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
-
-          <p className="text-xs text-muted-foreground text-center mt-6">
-            By continuing, you agree to our{" "}
-            <Link to="/terms" className="text-primary hover:underline">Terms</Link>
-            {" "}and{" "}
-            <Link to="/privacy" className="text-primary hover:underline">Privacy Policy</Link>
+          <h1 className="text-2xl font-bold mb-2">
+            {mode === "signin" && "Welcome back"}
+            {mode === "signup" && "Create your account"}
+            {mode === "forgot" && "Reset password"}
+          </h1>
+          <p className="text-muted-foreground mb-8">
+            {mode === "signin" && "Sign in to continue to your dashboard"}
+            {mode === "signup" && "Start your 14-day free trial"}
+            {mode === "forgot" && "We'll send you a reset link"}
           </p>
-        </CardContent>
-      </Card>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {mode === "signup" && (
+              <div className="space-y-2">
+                <Label htmlFor="name">Full name</Label>
+                <Input
+                  id="name"
+                  value={formData.fullName}
+                  onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
+                  placeholder="John Doe"
+                  className="h-11 bg-secondary border-border/50"
+                />
+                {errors.fullName && <p className="text-sm text-destructive">{errors.fullName}</p>}
+              </div>
+            )}
+            
+            <div className="space-y-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={formData.email}
+                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                placeholder="you@company.com"
+                className="h-11 bg-secondary border-border/50"
+              />
+              {errors.email && <p className="text-sm text-destructive">{errors.email}</p>}
+            </div>
+
+            {mode !== "forgot" && (
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  {mode === "signin" && (
+                    <button type="button" onClick={() => setMode("forgot")} className="text-sm text-muted-foreground hover:text-foreground">
+                      Forgot?
+                    </button>
+                  )}
+                </div>
+                <Input
+                  id="password"
+                  type="password"
+                  value={formData.password}
+                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="h-11 bg-secondary border-border/50"
+                />
+                {errors.password && <p className="text-sm text-destructive">{errors.password}</p>}
+              </div>
+            )}
+
+            <Button type="submit" className="w-full h-11 rounded-full" disabled={isLoading}>
+              {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {mode === "signin" && "Sign in"}
+              {mode === "signup" && "Create account"}
+              {mode === "forgot" && "Send reset link"}
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center text-sm">
+            {mode === "signin" && (
+              <p className="text-muted-foreground">
+                Don't have an account?{" "}
+                <button onClick={() => setMode("signup")} className="text-foreground hover:underline font-medium">Sign up</button>
+              </p>
+            )}
+            {mode === "signup" && (
+              <p className="text-muted-foreground">
+                Already have an account?{" "}
+                <button onClick={() => setMode("signin")} className="text-foreground hover:underline font-medium">Sign in</button>
+              </p>
+            )}
+            {mode === "forgot" && (
+              <button onClick={() => setMode("signin")} className="text-muted-foreground hover:text-foreground flex items-center justify-center gap-1 mx-auto">
+                <ArrowLeft className="h-4 w-4" /> Back to sign in
+              </button>
+            )}
+          </div>
+        </motion.div>
+      </div>
+
+      {/* Right Panel - Branding */}
+      <div className="hidden lg:flex flex-1 bg-secondary/30 border-l border-border/50 items-center justify-center p-12">
+        <div className="max-w-md text-center">
+          <div className="text-6xl font-bold text-gradient mb-6">Debug AI with confidence</div>
+          <p className="text-muted-foreground text-lg">Step-level tracing for every agent execution. Never guess why your AI failed again.</p>
+        </div>
+      </div>
     </div>
   );
 };
